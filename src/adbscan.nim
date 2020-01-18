@@ -1,6 +1,6 @@
 import strscans, strformat, threadpool, net, streams
 import cligen
-
+import sugar
 
 type
   ## Message object as described per ADB protocol
@@ -12,25 +12,29 @@ type
     magic: uint32
     data: string
   
-  ## In fact these values are ASCII strings, but ADB protocol specification
-  ## uses them like this
-  Command = enum
-    CmdSync = 0x434e5953, CmdClose = 0x45534c43, CmdWrite = 0x45545257,
-    CmdOpen = 0x4e45504f, CmdConnect = 0x4e584e43, CmdOkay = 0x59414b4f
-  
   ## Parse mode for input files 
   ParseMode = enum
     Masscan, PlainText
 
 
 const
+  CmdSync = 0x434e5953'u32
+  CmdClose = 0x45534c43'u32
+  CmdWrite = 0x45545257'u32
+  CmdOpen = 0x4e45504f'u32
+  CmdConnect = 0x4e584e43'u32
+  CmdOkay = 0x59414b4f'u32
+  # Calculate all possible magic values for all commands to check correctness
+  PossibleMagic = collect(newSeq):
+    for cmd in [CmdSync, CmdClose, CmdWrite, CmdOpen, CmdConnect, CmdOkay]:
+      cmd xor 0xffffffff'u32
   AdbVersion = 0x01000000
   MaxPayload = 4096
 
 
-proc newMessage(cmd: Command, arg0, arg1: uint32, data: string): Message = 
+proc newMessage(cmd: uint32, arg0, arg1: uint32, data: string): Message = 
   ## Creates a new Message object
-  result.command = uint32(cmd)
+  result.command = cmd
   result.arg0 = arg0
   result.arg1 = arg1
   result.magic = result.command xor 0xffffffff'u32
@@ -45,6 +49,8 @@ proc newMessage(cmd: Command, arg0, arg1: uint32, data: string): Message =
 proc send(s: Socket, m: Message) = 
   ## Sends an ADB Message over a socket
   var strm = newStringStream()
+  defer: strm.close()
+
   strm.write(m.command)
   strm.write(m.arg0)
   strm.write(m.arg1)
@@ -53,8 +59,8 @@ proc send(s: Socket, m: Message) =
   strm.write(m.magic)
   strm.write(m.data)
   strm.setPosition(0)
-  let encoded = strm.readAll()
 
+  let encoded = strm.readAll()
   s.send(encoded)
 
 
@@ -63,23 +69,27 @@ proc recvMessage(s: Socket, timeout = 3500): Message =
   ##
   ## You can optionally specify `timeout` for waiting in ms
   let msgInfo = newStringStream(s.recv(24, timeout))
+  defer: msgInfo.close()
   result.command = msgInfo.readUint32()
   result.arg0 = msgInfo.readUint32()
   result.arg1 = msgInfo.readUint32()
   result.dataLen = msgInfo.readUint32()
   result.dataCrc32 = msgInfo.readUint32()
   result.magic = msgInfo.readUint32()
-
+  # Check if the response is malformed
+  if result.magic notin PossibleMagic or result.dataLen >= 1000:
+    raise newException(ValueError, "Invalid client!")
+  
   # -1 since we don't really need the null character in the end
   result.data = s.recv(int(result.dataLen - 1), timeout)
 
 
 proc parsePayload(data: string): string =
+  result = ""
   var name, model, device: string
   const scanStr = "device::ro.product.name=$+;ro.product.model=$+;ro.product.device=$+;"
   if scanf(data, scanStr, name, model, device):
-    return &"name: {name}, model: {model}, device: {device}" 
-  return ""
+    result = &"name: {name}, model: {model}, device: {device}" 
 
 
 proc tryGetInfo(ip: string): string = 
@@ -135,7 +145,7 @@ proc cmdline(input = "ips.txt", output = "out.txt", parseMode = PlainText, threa
   
   let ips = parseFile(inputFile, parseMode)
   inputFile.close()
-  
+
   var results = newSeq[FlowVar[string]](len(ips))
   setMaxPoolSize(threads)
   for i, ip in ips:
