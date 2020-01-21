@@ -1,4 +1,4 @@
-import strscans, strformat, threadpool, net, streams
+import strscans, strformat, threadpool, net
 import cligen
 import sugar
 
@@ -18,74 +18,35 @@ type
 
 
 const
-  CmdSync = 0x434e5953'u32
-  CmdClose = 0x45534c43'u32
-  CmdWrite = 0x45545257'u32
-  CmdOpen = 0x4e45504f'u32
   CmdConnect = 0x4e584e43'u32
-  CmdOkay = 0x59414b4f'u32
-  # Calculate all possible magic values for all commands to check correctness
-  PossibleMagic = collect(newSeq):
-    for cmd in [CmdSync, CmdClose, CmdWrite, CmdOpen, CmdConnect, CmdOkay]:
-      cmd xor 0xffffffff'u32
+  CmdConnectMagic = 0xb1a7b1bc'u32
   AdbVersion = 0x01000000
   MaxPayload = 4096
 
 
-proc newMessage(cmd: uint32, arg0, arg1: uint32, data: string): Message = 
-  ## Creates a new Message object
-  result.command = cmd
-  result.arg0 = arg0
-  result.arg1 = arg1
-  result.magic = result.command xor 0xffffffff'u32
+proc newConnectMsg(): Message = 
+  ## Creates a new ADB connect message
+  result.command = CmdConnect
+  result.arg0 = AdbVersion
+  result.arg1 = MaxPayload
+  result.magic = CmdConnectMagic
+  result.data = "host::\x00"
   # Lenght of our data payload
-  result.dataLen = uint32(len(data))
+  result.dataLen = uint32(len(result.data))
   # Calculate checksum for our data payload
-  for c in data:
+  for c in result.data:
     result.dataCrc32 += uint32(ord(c))
-  result.data = data
-
-
-proc send(s: Socket, m: Message) = 
-  ## Sends an ADB Message over a socket
-  var strm = newStringStream()
-  defer: strm.close()
-
-  strm.write(m.command)
-  strm.write(m.arg0)
-  strm.write(m.arg1)
-  strm.write(m.dataLen)
-  strm.write(m.dataCrc32)
-  strm.write(m.magic)
-  strm.write(m.data)
-  strm.setPosition(0)
-
-  let encoded = strm.readAll()
-  s.send(encoded)
-
 
 proc recvMessage(s: Socket, timeout = 3500): Message = 
   ## Receives an ADB Message over a socket
-  ##
-  ## You can optionally specify `timeout` for waiting in ms
-  let msgInfo = newStringStream(s.recv(24, timeout))
-  defer: msgInfo.close()
-  result.command = msgInfo.readUint32()
-  result.arg0 = msgInfo.readUint32()
-  result.arg1 = msgInfo.readUint32()
-  result.dataLen = msgInfo.readUint32()
-  result.dataCrc32 = msgInfo.readUint32()
-  result.magic = msgInfo.readUint32()
-  # Check if the response is malformed
-  if result.magic notin PossibleMagic or result.dataLen >= 1000:
-    raise newException(ValueError, "Invalid client!")
+  discard s.recv(addr result, 24)
+  if result.magic != CmdConnectMagic or result.dataLen >= 1000:
+    raise newException(ValueError, "Invalid data!")
   
-  # -1 since we don't really need the null character in the end
-  result.data = s.recv(int(result.dataLen - 1), timeout)
+  result.data = s.recv(int(result.dataLen), timeout)
 
 
 proc parsePayload(data: string): string =
-  result = ""
   var name, model, device: string
   const scanStr = "device::ro.product.name=$+;ro.product.model=$+;ro.product.device=$+;"
   if scanf(data, scanStr, name, model, device):
@@ -101,8 +62,8 @@ proc tryGetInfo(ip: string): string =
   try:
     s.connect(ip, Port(5555), timeout = 5000)
 
-    let msg = newMessage(CmdConnect, AdbVersion, MaxPayload, "host::\x00")
-    s.send(msg)
+    var msg = newConnectMsg()
+    discard s.send(addr msg, sizeof(msg))
 
     let reply = s.recvMessage(3500)
     # If device is "unauthorized" then we will not get this
