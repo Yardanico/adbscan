@@ -1,6 +1,8 @@
-import strscans, strformat, threadpool, net
+import asyncdispatch, asyncnet
+import strutils, strscans, strformat
+import terminal
+
 import cligen
-import sugar
 
 type
   ## Message object as described per ADB protocol
@@ -12,17 +14,15 @@ type
     magic: uint32
     data: string
   
-  ## Parse mode for input files 
+  ## Parse mode for input files
   ParseMode = enum
     Masscan, PlainText
-
 
 const
   CmdConnect = 0x4e584e43'u32
   CmdConnectMagic = 0xb1a7b1bc'u32
   AdbVersion = 0x01000000
   MaxPayload = 4096
-
 
 proc newConnectMsg(): Message = 
   ## Creates a new ADB connect message
@@ -37,13 +37,13 @@ proc newConnectMsg(): Message =
   for c in result.data:
     result.dataCrc32 += uint32(ord(c))
 
-proc recvMessage(s: Socket, timeout = 3500): Message = 
+proc recvMessage(s: AsyncSocket): Future[Message] {.async.} = 
   ## Receives an ADB Message over a socket
-  discard s.recv(addr result, 24)
+  discard await s.recvInto(addr result, 24)
   if result.magic != CmdConnectMagic or result.dataLen >= 1000:
     raise newException(ValueError, "Invalid data!")
   
-  result.data = s.recv(int(result.dataLen), timeout)
+  result.data = await s.recv(int(result.dataLen))
 
 
 proc parsePayload(data: string): string =
@@ -52,27 +52,46 @@ proc parsePayload(data: string): string =
   if scanf(data, scanStr, name, model, device):
     result = &"name: {name}, model: {model}, device: {device}" 
 
+var maxWorkers = 0        # Maximum number of allowed workers
+var curWorkers = 0        # Current amount of workers
+var done = 0              # Number of finished scans
+var infoData: seq[string] # Results of the scan
 
-proc tryGetInfo(ip: string): string = 
+proc tryGetInfo(ip: string) {.async.} = 
   ## Checks if the Android Debug Bridge is hosted on a specified IP
-  ##
-  ## Returns "" if there is no ADB running, otherwise returns device info
-  var s = newSocket()
-  defer: s.close()
+  inc curWorkers
+  var s = newAsyncSocket()
+  
   try:
-    s.connect(ip, Port(5555), timeout = 5000)
-
+    let connectFut = s.connect(ip, Port(5555))
+    if not await withTimeout(connectFut, 5000):
+      return
+    
     var msg = newConnectMsg()
-    discard s.send(addr msg, sizeof(msg))
-
-    let reply = s.recvMessage(3500)
+    let sendFut = s.send(addr msg, sizeof(msg))
+    if not await withTimeout(sendFut, 2000):
+      return
+    
+    let reply = s.recvMessage()
+    if not await withTimeout(reply, 3500):
+      return
+    
+    let replyData = reply.read().data
     # If device is "unauthorized" then we will not get this
-    if "device" in reply.data:
-      return parsePayload(reply.data) 
+    if "device" in replyData:
+      infoData.add parsePayload(replyData)
+  
   except:
-    # echo getCurrentExceptionMsg()
-    return ""
-
+    discard
+  
+  finally:
+    inc done
+    # Yes, this is ugly but that's required because isClosed didn't work reliably
+    try:
+      s.close()
+    except:
+      discard
+    dec curWorkers
 
 proc parseFile(file: File, mode: ParseMode): seq[string] =
   ## Parses the file in specified `mode` (ParseMode)
@@ -90,8 +109,38 @@ proc parseFile(file: File, mode: ParseMode): seq[string] =
     of PlainText:
       result.add(line)
 
+var allLen: int
 
-proc cmdline(input = "ips.txt", output = "out.txt", parseMode = PlainText, threads = 256) = 
+proc updateBar() {.async.} = 
+  while done < allLen:
+    echo done
+    stdout.eraseLine()
+    let perc = (100 * done / allLen).formatFloat(precision = 3)
+    stdout.write &"{done} / {allLen} ({perc}%), found {infoData.len}"
+    stdout.flushFile()
+    await sleepAsync(100)
+  stdout.write '\n'
+
+proc mainWork(ips: sink seq[string]) {.async.} = 
+  allLen = ips.len
+  # Preallocate some space
+  infoData = newSeqOfCap[string](allLen div 4)
+  asyncCheck updateBar()
+  while true:
+    # No IPs left to scan -> exit the loop
+    if ips.len == 0:
+      break
+    # While there are IPs left to scan and number of workers
+    # is less than the maximum number of workers, create new workers
+    while ips.len > 0 and curWorkers < maxWorkers:
+      let ip = ips.pop()
+      asyncCheck tryGetInfo(ip)
+    # Sleep 50ms so that we don't burn CPU cycles
+    await sleepAsync(50)
+
+proc cmdline(input = "ips.txt", output = "out.txt", parseMode = PlainText, workers = 256) = 
+  maxWorkers = workers
+
   var inputFile: File
   try: 
     inputFile = open(input, fmRead)
@@ -106,25 +155,21 @@ proc cmdline(input = "ips.txt", output = "out.txt", parseMode = PlainText, threa
   
   let ips = parseFile(inputFile, parseMode)
   inputFile.close()
-
-  var results = newSeq[FlowVar[string]](len(ips))
-  setMaxPoolSize(threads)
-  for i, ip in ips:
-    results[i] = spawn tryGetInfo(ip)
   
-  # Wait for all threads to complete
-  sync()
-
-  for i, resData in results:
-    let res = ^resData
-    if res == "": continue
-    outFile.writeLine(&"ip: {ips[i]} {res}")
+  waitFor mainWork(ips)
+  
+  # Wait until all requests complete (or timeout)
+  while hasPendingOperations():
+    poll()
+  
+  for i, resData in infoData:
+    if resData == "": continue
+    outFile.writeLine(&"ip: {ips[i]} {resData}")
   
   outFile.flushFile()
   outFile.close()
 
-
-when isMainModule:
+proc main =
   # Use cligen to generate all command-line arguments with custom help
   dispatch(
     cmdline, 
@@ -132,6 +177,8 @@ when isMainModule:
       "input": "Input file",
       "output": "Output file",
       "parseMode": "Input file format: Masscan, PlainText",
-      "threads": "Amount of threads (256 is the maximum)"
+      "workers": "Amount of workers to use"
     }
   )
+
+main()
