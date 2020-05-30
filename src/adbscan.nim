@@ -47,13 +47,21 @@ proc newConnectMsg(): Message =
 
 proc recvMessage(s: AsyncSocket): Future[Message] {.async.} = 
   ## Receives an ADB Message over a socket
-  discard await s.recvInto(addr result, 24)
+  if (await s.recvInto(addr result, 24)) != 24:
+    raise newException(ValueError, "Expected 24 bytes!")
+  
   if result.magic != CmdConnectMagic or result.dataLen >= 1000:
     raise newException(ValueError, "Invalid data!")
   
   if result.dataLen > 0:
-    # TODO: Do we want to check CRC32 or not?
     result.data = await s.recv(int(result.dataLen))
+  
+  var crc = 0'u32
+  for c in result.data:
+    crc += uint32(ord(c))
+  
+  if crc != result.dataCrc32:
+    raise newException(ValueError, "crc32 doesn't match!")
 
 
 proc parsePayload(data: string): string =
@@ -173,8 +181,9 @@ proc cmdline(
   # Add the same IPs multiple times for scanning since they'll
   # be chosen at random later anyway
   if rescanCount > 1:
+    let curIps = ips
     for i in 1 .. rescanCount:
-      ips.add(ips)
+      ips.add(curIps)
   
   inputFile.close()
   
