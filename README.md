@@ -41,6 +41,6 @@ Options:
   --help-syntax                            advanced: prepend,plurals,..
   -i=, --input=      string     "ips.txt"  Input file
   -o=, --output=     string     "out.txt"  Output file
-  -p=, --parseMode=  ParseMode  PlainText  Input file format: Masscan, PlainText
+  -p=, --parseMode=  ParseMode  Masscan    Input file format: Masscan, PlainText
   -w=, --workers=    int        256        Amount of workers to use
 ```

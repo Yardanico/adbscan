@@ -26,16 +26,21 @@ const
 
 proc newConnectMsg(): Message = 
   ## Creates a new ADB connect message
-  result.command = CmdConnect
-  result.arg0 = AdbVersion
-  result.arg1 = MaxPayload
-  result.magic = CmdConnectMagic
-  result.data = "host::\x00"
-  # Lenght of our data payload
-  result.dataLen = uint32(len(result.data))
-  # Calculate checksum for our data payload
-  for c in result.data:
-    result.dataCrc32 += uint32(ord(c))
+  result = Message(
+    command: CmdConnect,
+    arg0: AdbVersion,
+    arg1: MaxPayload,
+    magic: CmdConnectMagic,
+    data: "host::\x00",
+    # Lenght of our data payload
+    dataLen: uint32(len(result.data)),
+    # Calculate checksum for our data payload
+    dataCrc32: block:
+      var crc = 0'u32
+      for c in result.data:
+        crc += uint32(ord(c))
+      crc
+  )
 
 proc recvMessage(s: AsyncSocket): Future[Message] {.async.} = 
   ## Receives an ADB Message over a socket
@@ -43,7 +48,8 @@ proc recvMessage(s: AsyncSocket): Future[Message] {.async.} =
   if result.magic != CmdConnectMagic or result.dataLen >= 1000:
     raise newException(ValueError, "Invalid data!")
   
-  result.data = await s.recv(int(result.dataLen))
+  if result.dataLen > 0:
+    result.data = await s.recv(int(result.dataLen))
 
 
 proc parsePayload(data: string): string =
@@ -112,21 +118,17 @@ proc parseFile(file: File, mode: ParseMode): seq[string] =
 var allLen: int
 
 proc updateBar() {.async.} = 
-  while done < allLen:
-    echo done
-    stdout.eraseLine()
-    let perc = (100 * done / allLen).formatFloat(precision = 3)
-    stdout.write &"{done} / {allLen} ({perc}%), found {infoData.len}"
-    stdout.flushFile()
-    await sleepAsync(100)
-  stdout.write '\n'
+  stdout.eraseLine()
+  let perc = (100 * done / allLen).formatFloat(precision = 3)
+  stdout.write &"{done} / {allLen} ({perc}%), found {infoData.len}"
+  stdout.flushFile()
 
 proc mainWork(ips: sink seq[string]) {.async.} = 
   allLen = ips.len
   # Preallocate some space
   infoData = newSeqOfCap[string](allLen div 4)
-  asyncCheck updateBar()
   while true:
+    asyncCheck updateBar()
     # No IPs left to scan -> exit the loop
     if ips.len == 0:
       break
@@ -138,7 +140,7 @@ proc mainWork(ips: sink seq[string]) {.async.} =
     # Sleep 50ms so that we don't burn CPU cycles
     await sleepAsync(50)
 
-proc cmdline(input = "ips.txt", output = "out.txt", parseMode = PlainText, workers = 256) = 
+proc cmdline(input = "ips.txt", output = "out.txt", parseMode = Masscan, workers = 256) = 
   maxWorkers = workers
 
   var inputFile: File
@@ -162,9 +164,13 @@ proc cmdline(input = "ips.txt", output = "out.txt", parseMode = PlainText, worke
   while hasPendingOperations():
     poll()
   
-  for i, resData in infoData:
-    if resData == "": continue
-    outFile.writeLine(&"ip: {ips[i]} {resData}")
+  # Last update of the bar just for completeness
+  waitFor updateBar()
+  echo ""
+  
+  for i, res in infoData:
+    if res == "": continue
+    outFile.writeLine(&"ip: {ips[i]} {res}")
   
   outFile.flushFile()
   outFile.close()
