@@ -1,8 +1,11 @@
 import asyncdispatch, asyncnet
-import strutils, strscans, strformat
+import strutils, strscans, strformat, sequtils
 import terminal
+import random
 
 import cligen
+
+randomize()
 
 type
   ## Message object as described per ADB protocol
@@ -49,6 +52,7 @@ proc recvMessage(s: AsyncSocket): Future[Message] {.async.} =
     raise newException(ValueError, "Invalid data!")
   
   if result.dataLen > 0:
+    # TODO: Do we want to check CRC32 or not?
     result.data = await s.recv(int(result.dataLen))
 
 
@@ -120,13 +124,17 @@ var allLen: int
 proc updateBar() {.async.} = 
   stdout.eraseLine()
   let perc = (100 * done / allLen).formatFloat(precision = 3)
+  # I know this isn't the smartest way but it should work :D
+  # This is here just because we want to show stats which the user would
+  # actually expect, because otherwise you can get 30 good results for 10 IPs
+  infoData = infoData.deduplicate()
   stdout.write &"{done} / {allLen} ({perc}%), found {infoData.len}"
   stdout.flushFile()
 
 proc mainWork(ips: sink seq[string]) {.async.} = 
   allLen = ips.len
   # Preallocate some space
-  infoData = newSeqOfCap[string](allLen div 4)
+  infoData = newSeqOfCap[string](allLen)
   while true:
     asyncCheck updateBar()
     # No IPs left to scan -> exit the loop
@@ -135,12 +143,18 @@ proc mainWork(ips: sink seq[string]) {.async.} =
     # While there are IPs left to scan and number of workers
     # is less than the maximum number of workers, create new workers
     while ips.len > 0 and curWorkers < maxWorkers:
-      let ip = ips.pop()
+      # Randomization :P
+      let i = rand(0 ..< ips.len)
+      let ip = ips[i]
+      ips.del(i)
       asyncCheck tryGetInfo(ip)
     # Sleep 50ms so that we don't burn CPU cycles
     await sleepAsync(50)
 
-proc cmdline(input = "ips.txt", output = "out.txt", parseMode = Masscan, workers = 256) = 
+proc cmdline(
+  input = "ips.txt", output = "out.txt", 
+  parseMode = Masscan, workers = 512, rescanCount = 3
+) =
   maxWorkers = workers
 
   var inputFile: File
@@ -155,7 +169,13 @@ proc cmdline(input = "ips.txt", output = "out.txt", parseMode = Masscan, workers
   except:
     quit(&"Cannot open {output} for writing!", 1)
   
-  let ips = parseFile(inputFile, parseMode)
+  var ips = parseFile(inputFile, parseMode)
+  # Add the same IPs multiple times for scanning since they'll
+  # be chosen at random later anyway
+  if rescanCount > 1:
+    for i in 1 .. rescanCount:
+      ips.add(ips)
+  
   inputFile.close()
   
   waitFor mainWork(ips)
@@ -167,7 +187,7 @@ proc cmdline(input = "ips.txt", output = "out.txt", parseMode = Masscan, workers
   # Last update of the bar just for completeness
   waitFor updateBar()
   echo ""
-  
+
   for i, res in infoData:
     if res == "": continue
     outFile.writeLine(&"ip: {ips[i]} {res}")
@@ -183,7 +203,8 @@ proc main =
       "input": "Input file",
       "output": "Output file",
       "parseMode": "Input file format: Masscan, PlainText",
-      "workers": "Amount of workers to use"
+      "workers": "Amount of workers to use",
+      "rescanCount": "Amount of requests to be sent to a single IP"
     }
   )
 

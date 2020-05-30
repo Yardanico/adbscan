@@ -37,10 +37,11 @@ adbscan --help
 Usage:
   cmdline [optional-params] 
 Options:
-  -h, --help                               print this cligen-erated help
-  --help-syntax                            advanced: prepend,plurals,..
-  -i=, --input=      string     "ips.txt"  Input file
-  -o=, --output=     string     "out.txt"  Output file
-  -p=, --parseMode=  ParseMode  Masscan    Input file format: Masscan, PlainText
-  -w=, --workers=    int        256        Amount of workers to use
+  -h, --help                                 print this cligen-erated help
+  --help-syntax                              advanced: prepend,plurals,..
+  -i=, --input=        string     "ips.txt"  Input file
+  -o=, --output=       string     "out.txt"  Output file
+  -p=, --parseMode=    ParseMode  Masscan    Input file format: Masscan, PlainText
+  -w=, --workers=      int        512        Amount of workers to use
+  -r=, --rescanCount=  int        3          Amount of requests to be sent to a single IP
 ```
