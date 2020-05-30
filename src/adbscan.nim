@@ -64,16 +64,17 @@ proc recvMessage(s: AsyncSocket): Future[Message] {.async.} =
     raise newException(ValueError, "crc32 doesn't match!")
 
 
-proc parsePayload(data: string): string =
+proc parsePayload(ip, data: string): string =
   var name, model, device: string
   const scanStr = "device::ro.product.name=$+;ro.product.model=$+;ro.product.device=$+;"
   if scanf(data, scanStr, name, model, device):
-    result = &"name: {name}, model: {model}, device: {device}" 
+    result = &"ip: {ip} name: {name}, model: {model}, device: {device}" 
 
-var maxWorkers = 0        # Maximum number of allowed workers
-var curWorkers = 0        # Current amount of workers
-var done = 0              # Number of finished scans
-var infoData: seq[string] # Results of the scan
+var 
+  maxWorkers = 0        # Maximum number of allowed workers
+  curWorkers = 0        # Current amount of workers
+  done = 0              # Number of finished scans
+  infoData: seq[string] # Results of the scan
 
 proc tryGetInfo(ip: string) {.async.} = 
   ## Checks if the Android Debug Bridge is hosted on a specified IP
@@ -82,22 +83,25 @@ proc tryGetInfo(ip: string) {.async.} =
   
   try:
     let connectFut = s.connect(ip, Port(5555))
+    # 5 seconds to connect
     if not await withTimeout(connectFut, 5000):
       return
     
     var msg = newConnectMsg()
     let sendFut = s.send(addr msg, sizeof(msg))
+    # 2 seconds to send the connect packet
     if not await withTimeout(sendFut, 2000):
       return
     
     let reply = s.recvMessage()
+    # 3.5 seconds to receive a reply
     if not await withTimeout(reply, 3500):
       return
     
     let replyData = reply.read().data
     # If device is "unauthorized" then we will not get this
     if "device" in replyData:
-      infoData.add parsePayload(replyData)
+      infoData.add parsePayload(ip, replyData)
   
   except:
     discard
@@ -161,7 +165,7 @@ proc mainWork(ips: sink seq[string]) {.async.} =
 
 proc cmdline(
   input = "ips.txt", output = "out.txt", 
-  parseMode = Masscan, workers = 512, rescanCount = 3
+  parseMode = Masscan, workers = 512, rescanCount = 2
 ) =
   maxWorkers = workers
 
@@ -180,10 +184,8 @@ proc cmdline(
   var ips = parseFile(inputFile, parseMode)
   # Add the same IPs multiple times for scanning since they'll
   # be chosen at random later anyway
-  if rescanCount > 1:
-    let curIps = ips
-    for i in 1 .. rescanCount:
-      ips.add(curIps)
+  if rescanCount > 0:
+    ips = ips.cycle(rescanCount + 1)
   
   inputFile.close()
   
@@ -197,9 +199,8 @@ proc cmdline(
   waitFor updateBar()
   echo ""
 
-  for i, res in infoData:
-    if res == "": continue
-    outFile.writeLine(&"ip: {ips[i]} {res}")
+  for res in infoData:
+    outFile.writeLine(res)
   
   outFile.flushFile()
   outFile.close()
@@ -213,7 +214,7 @@ proc main =
       "output": "Output file",
       "parseMode": "Input file format: Masscan, PlainText",
       "workers": "Amount of workers to use",
-      "rescanCount": "Amount of requests to be sent to a single IP"
+      "rescanCount": "Amount of requests to be sent to a single IP (0 for no rescans)"
     }
   )
 
