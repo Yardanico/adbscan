@@ -65,10 +65,14 @@ proc recvMessage(s: AsyncSocket): Future[Message] {.async.} =
 
 
 proc parsePayload(ip, data: string): string =
-  var name, model, device: string
-  const scanStr = "device::ro.product.name=$+;ro.product.model=$+;ro.product.device=$+;"
-  if scanf(data, scanStr, name, model, device):
-    result = &"ip: {ip} name: {name}, model: {model}, device: {device}" 
+  var tmp, name, model, device: string
+  # device::http://ro.product.name =starltexx;ro.product.model=SM-G960F;ro.product.device=starlte;features=cmd,stat_v2,shell_v2
+  const scanStr = "device::$+ro.product.name$+=$+;ro.product.model=$+;ro.product.device=$+;"
+  # This parsing is optional
+  if scanf(data, scanStr, tmp, tmp, name, model, device):
+    result = &"ip: {ip} name: {name}, model: {model}, device: {device}"
+  else:
+    result = &"ip: {ip} device info: {data}"
 
 var 
   maxWorkers = 0        # Maximum number of allowed workers
