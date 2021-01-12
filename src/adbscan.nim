@@ -169,7 +169,7 @@ proc mainWork(ips: sink seq[string]) {.async.} =
 
 proc cmdline(
   input = "ips.txt", output = "out.txt", 
-  parseMode = Masscan, workers = 512, rescanCount = 2
+  parseMode = PlainText, workers = 512, rescanCount = 2
 ) =
   maxWorkers = workers
 
@@ -216,7 +216,7 @@ proc main =
     help = {
       "input": "Input file",
       "output": "Output file",
-      "parseMode": "Input file format: Masscan, PlainText",
+      "parseMode": "Input file format: Masscan, PlainText (default)",
       "workers": "Amount of workers to use",
       "rescanCount": "Amount of requests to be sent to a single IP (0 for no rescans)"
     }
