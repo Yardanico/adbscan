@@ -18,7 +18,13 @@ when defined(zigcc):
 # Cross-compile to a Windows .exe
 when defined(crosswin):
   switch("cc", "gcc")
-  let mingwExe = "x86_64-w64-mingw32-gcc"
+  let mingwExe = 
+    if hostCPU == "amd64":
+      "x86_64-w64-mingw32-gcc"
+    elif hostCPU == "i386":
+      "i686-w64-mingw32-gcc"
+    else: 
+      "error"
   switch("gcc.linkerexe", mingwExe)
   switch("gcc.exe", mingwExe)
   switch("gcc.path", findExe(mingwExe).rsplit("/", 1)[0])
