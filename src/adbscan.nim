@@ -24,6 +24,9 @@ type
   ## Parse mode for input files
   ParseMode = enum
     Masscan, PlainText
+
+  OutputType = enum
+    Auto, Text, Json, Csv
   
   ScanResult = object
     name: string
@@ -82,6 +85,7 @@ proc recvMessage(s: AsyncSocket): Future[Option[Message]] {.async.} =
   result = some(msg)
 
 proc parsePayload(ip, data: string): ScanResult =
+  result = ScanResult(rawData: data)
   var tmp, name, model, device: string
   const scanStr = "device::$*ro.product.name$*=$+;ro.product.model=$+;ro.product.device=$+;"
 
@@ -89,9 +93,6 @@ proc parsePayload(ip, data: string): ScanResult =
     result.name = name
     result.model = model
     result.device = device
-  # If parsing failed
-  else:
-    result.rawData = data
 
 var 
   maxWorkers = 0                      # Maximum number of allowed workers
@@ -185,9 +186,37 @@ proc mainWork(ips: sink seq[string]) {.async.} =
     # Sleep 50ms so that we don't burn CPU cycles
     await sleepAsync(50)
 
+proc writeText(f: File, results: TableRef[string, ScanResult]) = 
+  for ip, res in results:
+    f.writeLine(if res.name.len == 0:
+      &"ip: {ip}, device info: {res.rawData}"
+    else:
+      &"ip: {ip} name: {res.name}, model: {res.model}, device: {res.device}, device info: {res.rawData}")
+
+import std / json
+
+proc writeJson(f: File, results: TableRef[string, ScanResult]) = 
+  var root = newJArray()
+  for ip, res in results:
+    var obj = %*{
+      "ip": ip,
+      "name": res.name,
+      "model": res.model,
+      "device": res.device,
+      "data": res.rawData
+    }
+    root.add obj
+  f.write(root.pretty())
+
+proc writeCsv(f: File, results: TableRef[string, ScanResult]) = 
+  f.writeLine("IP,Name,Model,Device,RawData")
+  for ip, res in results:
+    # quote rawData since it may contain commas
+    f.writeLine(&"{ip},{res.name},{res.model},{res.device},\"{res.rawData}\"")
+
 proc cmdline(
   input = "ips.txt", output = "out.txt", 
-  parseMode = PlainText, workers: Natural = 512, rescanCount: range[0..100] = 2
+  parseMode = PlainText, format = Auto, workers: Natural = 512, rescanCount: range[0..100] = 2
 ) =
   maxWorkers = workers
 
@@ -202,6 +231,16 @@ proc cmdline(
     outFile = open(output, fmWrite)
   except:
     quit(&"Cannot open {output} for writing!", 1)
+
+  var outType = format
+  if outType == Auto:
+    let tmp = output.rsplit(".", maxsplit = 1)
+    if tmp.len == 2:
+      let ext = tmp[1]
+      case ext
+      of "json": outType = Json
+      of "csv": outType = Csv
+      else: outType = Text
   
   var ips = parseFile(inputFile, parseMode)
   inputFile.close()
@@ -226,12 +265,12 @@ proc cmdline(
   updateBar()
   echo ""
 
-  for ip, res in results:
-    outfile.writeLine(if res.rawData.len > 0:
-      &"ip: {ip}, device info: {res.rawData}"
-    else:
-      &"ip: {ip} name: {res.name}, model: {res.model}, device: {res.device}")
-  
+  case outType
+  of Csv: writeCsv(outfile, results)
+  of Json: writeJson(outfile, results)
+  of Text: writeText(outfile, results)
+  else: discard
+
   outFile.flushFile()
   outFile.close()
 
@@ -244,7 +283,8 @@ proc main =
       "output": "Output file",
       "parseMode": "Input file format: PlainText (default), Masscan",
       "workers": "Amount of workers to use",
-      "rescanCount": "Amount of requests to be sent to a single IP (1 for a single scan)"
+      "rescanCount": "Amount of requests to be sent to a single IP (1 for a single scan)",
+      "format": "Format of the output file: Auto (based on the filename), Plain, Json, Csv"
     }
   )
 

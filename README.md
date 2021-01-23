@@ -44,15 +44,17 @@ $ adbscan --help
 Usage:
   cmdline [optional-params] 
 Options:
-  -h, --help                                 print this cligen-erated help
-  --help-syntax                              advanced: prepend,plurals,..
-  -i=, --input=        string     "ips.txt"  Input file
-  -o=, --output=       string     "out.txt"  Output file
-  -p=, --parseMode=    ParseMode  PlainText  Input file format: PlainText (default), Masscan
-  -w=, --workers=      int        512        Amount of workers to use
-  -r=, --rescanCount=  int        2          Amount of requests to be sent to a single IP (1 for a single scan)
+  -h, --help                                  print this cligen-erated help
+  --help-syntax                               advanced: prepend,plurals,..
+  -i=, --input=        string      "ips.txt"  Input file
+  -o=, --output=       string      "out.txt"  Output file
+  -p=, --parseMode=    ParseMode   PlainText  Input file format: PlainText (default), Masscan
+  -f=, --format=       OutputType  Auto       Format of the output file: Auto (based on the filename), Plain, Json, Csv
+  -w=, --workers=      int         512        Amount of workers to use
+  -r=, --rescanCount=  int         2          Amount of requests to be sent to a single IP (1 for a single scan)
 ```
 
+### Input modes
 - `PlainText` mode (which is the default) accepts input file as a line-delimited list of IPs. For example:
 
 ```
@@ -67,4 +69,39 @@ Options:
 open tcp 5555 1.2.3.4 1611375649
 open tcp 5555 4.5.6.7 1611375649
 # end
+```
+
+### Output modes
+- `Auto` - choose based on the filename (Text for .txt, JSON for .json, CSV for .csv, otherwise Text)
+- `Plain`:
+```
+ip: 1.2.3.4 name: rk3318, model: AndroidTV H96Max, device: rk3318, device info: device::ro.product.name=rk3318;ro.product.model=AndroidTV H96Max;ro.product.device=rk3318;features=cmd,stat_v2,shell_v2
+ip: 1.2.3.4 name: rk3318, model: AndroidTV H96Max, device: rk3318, device info: device::ro.product.name=rk3318;ro.product.model=AndroidTV H96Max;ro.product.device=rk3318;features=cmd,stat_v2,shell_v2
+```
+
+- `Json`:
+```json
+[
+  {
+    "ip": "1.1.1.1",
+    "name": "rk3318",
+    "model": "AndroidTV H96Max",
+    "device": "rk3318",
+    "data": "device::ro.product.name=rk3318;ro.product.model=AndroidTV H96Max;ro.product.device=rk3318;features=cmd,stat_v2,shell_v2"
+  },
+  {
+    "ip": "1.1.1.1",
+    "name": "rk3318",
+    "model": "HK1 Max",
+    "device": "rk3318",
+    "data": "device::ro.product.name=rk3318;ro.product.model=HK1 Max;ro.product.device=rk3318;features=cmd,stat_v2,shell_v2"
+  }
+]
+```
+
+- `Csv`:
+```csv
+IP,Name,Model,Device,RawData
+1.2.3.4,rk3318,AndroidTV H96Max,rk3318,"device::ro.product.name=rk3318;ro.product.model=AndroidTV H96Max;ro.product.device=rk3318;features=cmd,stat_v2,shell_v2"
+1.2.3.4,rk3318,HK1 Max,rk3318,"device::ro.product.name=rk3318;ro.product.model=HK1 Max;ro.product.device=rk3318;features=cmd,stat_v2,shell_v2"
 ```

@@ -1,5 +1,10 @@
 # Changelog
 
+
+## 1.2.1
+- Add CSV and JSON output formats
+- Always include raw ADB data response in the results
+
 ## 1.2.0
 - Changed the default input file mode from Masscan to PlainText.
 - Changed the way rescan count is calculated.
