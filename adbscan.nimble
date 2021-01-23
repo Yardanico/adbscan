@@ -1,5 +1,5 @@
 # Package
-version       = "1.2.0"
+version       = "1.2.2"
 author        = "Danil Yarantsev (Yardanico)"
 description   = "An utility for scanning IPs for unprotected ADB Android devices connected to the internet"
 license       = "MIT"

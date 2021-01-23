@@ -19,7 +19,6 @@ type
     dataLen: uint32
     dataCrc32: uint32
     magic: uint32
-    data: string
   
   ## Parse mode for input files
   ParseMode = enum
@@ -40,14 +39,14 @@ const
   AdbVersion = 0x01000000
   MaxPayload = 4096
 
-proc newConnectMsg(): Message = 
+proc newConnectMsg(): tuple[m: Message, data: string] = 
   ## Creates a new ADB connect message
-  result = Message(
+  result.data = "host::\x00"
+  result.m = Message(
     command: CmdConnect,
     arg0: AdbVersion,
     arg1: MaxPayload,
     magic: CmdConnectMagic,
-    data: "host::\x00",
     # Lenght of our data payload
     dataLen: uint32(len(result.data)),
     # Calculate checksum for our data payload
@@ -58,31 +57,30 @@ proc newConnectMsg(): Message =
       crc
   )
 
-proc recvMessage(s: AsyncSocket): Future[Option[Message]] {.async.} = 
+proc recvMessage(s: AsyncSocket): Future[Option[tuple[m: Message, data: string]]] {.async.} = 
   ## Receives an ADB Message over a socket
-  var msg: Message
-
-  if (await s.recvInto(addr msg, 24)) != 24:
+  var res: tuple[m: Message, data: string]
+  if (await s.recvInto(addr res.m, 24)) != 24:
     # Expected 24 bytes
     return
   
-  if msg.magic != CmdConnectMagic or msg.dataLen >= 1000:
+  if res.m.magic != CmdConnectMagic or res.m.dataLen >= 1000:
     # Invalid data
     return
   
-  if msg.dataLen > 0:
-    msg.data = await s.recv(int(msg.dataLen))
+  if res.m.dataLen > 0:
+    res.data = await s.recv(int(res.m.dataLen))
   
   # Verify the data checksum
   var crc = 0'u32
-  for c in msg.data:
+  for c in res.data:
     crc += uint32(ord(c))
   
-  if crc != msg.dataCrc32:
+  if crc != res.m.dataCrc32:
     # crc32 checksum doesn't match
     return
 
-  result = some(msg)
+  result = some(res)
 
 proc parsePayload(ip, data: string): ScanResult =
   result = ScanResult(rawData: data)
@@ -108,13 +106,17 @@ proc tryGetInfo(ip: string) {.async.} =
   try:
     let connectFut = s.connect(ip, Port(5555))
     # 5 seconds to connect
-    if not await withTimeout(connectFut, 5000):
+    if not await withTimeout(connectFut, 3500):
       return
     
     var msg = newConnectMsg()
-    let sendFut = s.send(addr msg, sizeof(msg))
-    # 2 seconds to send the connect packet
+    let sendFut = s.send(addr msg.m, sizeof(msg))
+    # Send the message
     if not await withTimeout(sendFut, 2000):
+      return
+    # Send the data
+    let sendDataFut = s.send(msg.data)
+    if not await withTimeout(sendDataFut, 1000):
       return
     
     let reply = s.recvMessage()

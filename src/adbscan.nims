@@ -1,5 +1,20 @@
 import strutils
 
+switch("opt", "speed")
+when defined(zigcc):
+  switch("cc", "clang")
+  switch("clang.exe", "zigcc")
+  switch("clang.linkerexe", "zigcc")
+  switch("passL", "-fno-sanitize=undefined")
+  switch("passC", "-fno-sanitize=undefined")
+  case hostCPU
+  of "amd64": 
+    switch("passC", "-target x86_64-linux-musl")
+    switch("passL", "-target x86_64-linux-musl")
+  of "i386": 
+    switch("passC", "-target i386-linux-musl")
+    switch("passL", "-target i386-linux-musl")
+
 # Cross-compile to a Windows .exe
 when defined(crosswin):
   switch("cc", "gcc")

@@ -1,5 +1,7 @@
 # Changelog
 
+## 1.2.2
+- Fix critical bug with adbscan not working on 32-bit platforms.
 
 ## 1.2.1
 - Add CSV and JSON output formats
