@@ -47,14 +47,8 @@ proc newConnectMsg(): tuple[m: Message, data: string] =
     arg0: AdbVersion,
     arg1: MaxPayload,
     magic: CmdConnectMagic,
-    # Lenght of our data payload
-    dataLen: uint32(len(result.data)),
-    # Calculate checksum for our data payload
-    dataCrc32: block:
-      var crc = 0'u32
-      for c in result.data:
-        crc += uint32(ord(c))
-      crc
+    dataLen: 0,
+    dataCrc32: 0
   )
 
 proc recvMessage(s: AsyncSocket): Future[Option[tuple[m: Message, data: string]]] {.async.} = 
@@ -64,7 +58,7 @@ proc recvMessage(s: AsyncSocket): Future[Option[tuple[m: Message, data: string]]
     # Expected 24 bytes
     return
   
-  if res.m.magic != CmdConnectMagic or res.m.dataLen >= 1000:
+  if res.m.magic != CmdConnectMagic:
     # Invalid data
     return
   
@@ -114,11 +108,8 @@ proc tryGetInfo(ip: string) {.async.} =
     # Send the message
     if not await withTimeout(sendFut, 2000):
       return
-    # Send the data
-    let sendDataFut = s.send(msg.data)
-    if not await withTimeout(sendDataFut, 1000):
-      return
     
+    # Wait for the reply
     let reply = s.recvMessage()
     # 3.5 seconds to receive a reply
     if not await withTimeout(reply, 3500):
