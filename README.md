@@ -25,14 +25,21 @@ ip: 1.2.3.4 name: p281, model: Hybrid 2, device: p281
 ip: 1.2.3.4 name: rk322x, model: UHD-G101_V2, device: rk322x
 ```
 
-This program also outputs a simple progress bar in the terminal which looks like that:
+For devices which aren't able to be parsed by adbscan the entry will look like
+```
+ip: 1.2.3.4 device info: device::http://ro.product.name =starltexx;ro.product.model=SM-G960F;ro.product.device=starlte;features=cmd,stat_v2,shell_v2
+```
+
+This program also has a simple progress bar in the terminal. 
+It's not 100% representative of real "found" count since with rescans
+two IPs can be scanned asynchronously.  
 ```
 165 / 313, found 1
 ```
 
 ## Command line options
 ```
-adbscan --help
+$ adbscan --help
 
 Usage:
   cmdline [optional-params] 
@@ -41,7 +48,23 @@ Options:
   --help-syntax                              advanced: prepend,plurals,..
   -i=, --input=        string     "ips.txt"  Input file
   -o=, --output=       string     "out.txt"  Output file
-  -p=, --parseMode=    ParseMode  Masscan    Input file format: Masscan, PlainText
+  -p=, --parseMode=    ParseMode  PlainText  Input file format: PlainText (default), Masscan
   -w=, --workers=      int        512        Amount of workers to use
-  -r=, --rescanCount=  int        3          Amount of requests to be sent to a single IP
+  -r=, --rescanCount=  int        2          Amount of requests to be sent to a single IP (1 for a single scan)
+```
+
+- `PlainText` mode (which is the default) accepts input file as a line-delimited list of IPs. For example:
+
+```
+1.2.3.4
+3.4.5.6
+5.6.6.7
+```
+
+- `Masscan` mode accepts output of a Masscan's `-oL` output file. For example:
+```
+#masscan
+open tcp 5555 1.2.3.4 1611375649
+open tcp 5555 4.5.6.7 1611375649
+# end
 ```

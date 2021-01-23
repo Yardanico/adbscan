@@ -1,9 +1,13 @@
-import asyncdispatch, asyncnet
-import strutils, strscans, strformat, sequtils
-import terminal
-import random
+import std / [
+  asyncdispatch, asyncnet,
+  strutils, strscans, strformat,
+  options,
+  tables, sequtils,
+  terminal,
+  random
+]
 
-import cligen
+import pkg / cligen
 
 randomize()
 
@@ -20,6 +24,12 @@ type
   ## Parse mode for input files
   ParseMode = enum
     Masscan, PlainText
+  
+  ScanResult = object
+    name: string
+    model: string
+    device: string
+    rawData: string
 
 const
   CmdConnect = 0x4e584e43'u32
@@ -45,40 +55,49 @@ proc newConnectMsg(): Message =
       crc
   )
 
-proc recvMessage(s: AsyncSocket): Future[Message] {.async.} = 
+proc recvMessage(s: AsyncSocket): Future[Option[Message]] {.async.} = 
   ## Receives an ADB Message over a socket
-  if (await s.recvInto(addr result, 24)) != 24:
-    raise newException(ValueError, "Expected 24 bytes!")
+  var msg: Message
+
+  if (await s.recvInto(addr msg, 24)) != 24:
+    # Expected 24 bytes
+    return
   
-  if result.magic != CmdConnectMagic or result.dataLen >= 1000:
-    raise newException(ValueError, "Invalid data!")
+  if msg.magic != CmdConnectMagic or msg.dataLen >= 1000:
+    # Invalid data
+    return
   
-  if result.dataLen > 0:
-    result.data = await s.recv(int(result.dataLen))
+  if msg.dataLen > 0:
+    msg.data = await s.recv(int(msg.dataLen))
   
+  # Verify the data checksum
   var crc = 0'u32
-  for c in result.data:
+  for c in msg.data:
     crc += uint32(ord(c))
   
-  if crc != result.dataCrc32:
-    raise newException(ValueError, "crc32 doesn't match!")
+  if crc != msg.dataCrc32:
+    # crc32 checksum doesn't match
+    return
 
+  result = some(msg)
 
-proc parsePayload(ip, data: string): string =
+proc parsePayload(ip, data: string): ScanResult =
   var tmp, name, model, device: string
-  # device::http://ro.product.name =starltexx;ro.product.model=SM-G960F;ro.product.device=starlte;features=cmd,stat_v2,shell_v2
   const scanStr = "device::$*ro.product.name$*=$+;ro.product.model=$+;ro.product.device=$+;"
-  # This parsing is optional
+
   if scanf(data, scanStr, tmp, tmp, name, model, device):
-    result = &"ip: {ip} name: {name}, model: {model}, device: {device}"
+    result.name = name
+    result.model = model
+    result.device = device
+  # If parsing failed
   else:
-    result = &"ip: {ip} device info: {data}"
+    result.rawData = data
 
 var 
-  maxWorkers = 0        # Maximum number of allowed workers
-  curWorkers = 0        # Current amount of workers
-  done = 0              # Number of finished scans
-  infoData: seq[string] # Results of the scan
+  maxWorkers = 0                      # Maximum number of allowed workers
+  curWorkers = 0                      # Current amount of workers
+  done = 0                            # Number of finished scans
+  results: TableRef[string, ScanResult]  # Results of the scan (ip:data)
 
 proc tryGetInfo(ip: string) {.async.} = 
   ## Checks if the Android Debug Bridge is hosted on a specified IP
@@ -102,17 +121,18 @@ proc tryGetInfo(ip: string) {.async.} =
     if not await withTimeout(reply, 3500):
       return
     
-    let replyData = reply.read().data
-    # If device is "unauthorized" then we will not get this
-    if "device" in replyData:
-      infoData.add parsePayload(ip, replyData)
+    let replyMaybe = reply.read()
+    # If device is "unauthorized" then we will not get "device"
+    if replyMaybe.isSome() and "device" in replyMaybe.get().data:
+      results[ip] = parsePayload(ip, replyMaybe.get().data)
   
   except:
     discard
   
   finally:
     inc done
-    # Yes, this is ugly but that's required because isClosed didn't work reliably
+    # Yes, this is ugly but that's required
+    # because isClosed doesn't work reliably
     try:
       s.close()
     except:
@@ -137,39 +157,37 @@ proc parseFile(file: File, mode: ParseMode): seq[string] =
 
 var allLen: int
 
-proc updateBar() {.async.} = 
+proc updateBar() = 
   stdout.eraseLine()
-  let perc = (100 * done / allLen).formatFloat(precision = 3)
-  # I know this isn't the smartest way but it should work :D
-  # This is here just because we want to show stats which the user would
-  # actually expect, because otherwise you can get 30 good results for 10 IPs
-  infoData = infoData.deduplicate()
-  stdout.write &"{done} / {allLen} ({perc}%), found {infoData.len}"
+  let perc = (100 * done / allLen).formatFloat(ffDecimal, 1)
+  stdout.write &"{done} / {allLen} ({perc}%), found {results.len}"
   stdout.flushFile()
 
 proc mainWork(ips: sink seq[string]) {.async.} = 
   allLen = ips.len
+
   # Preallocate some space
-  infoData = newSeqOfCap[string](allLen)
+  results = newTable[string, ScanResult](allLen div 10)
   while true:
-    asyncCheck updateBar()
+    updateBar()
     # No IPs left to scan -> exit the loop
     if ips.len == 0:
       break
+    
     # While there are IPs left to scan and number of workers
     # is less than the maximum number of workers, create new workers
     while ips.len > 0 and curWorkers < maxWorkers:
-      # Randomization :P
-      let i = rand(0 ..< ips.len)
-      let ip = ips[i]
-      ips.del(i)
-      asyncCheck tryGetInfo(ip)
+      let ip = ips.pop()
+      # Check if that IP is already known to have ADB running
+      if ip notin results:
+        asyncCheck tryGetInfo(ip)
+    
     # Sleep 50ms so that we don't burn CPU cycles
     await sleepAsync(50)
 
 proc cmdline(
   input = "ips.txt", output = "out.txt", 
-  parseMode = PlainText, workers = 512, rescanCount = 2
+  parseMode = PlainText, workers: Natural = 512, rescanCount: range[0..100] = 2
 ) =
   maxWorkers = workers
 
@@ -186,25 +204,33 @@ proc cmdline(
     quit(&"Cannot open {output} for writing!", 1)
   
   var ips = parseFile(inputFile, parseMode)
-  # Add the same IPs multiple times for scanning since they'll
-  # be chosen at random later anyway
-  if rescanCount > 0:
-    ips = ips.cycle(rescanCount + 1)
-  
   inputFile.close()
+
+  # Add the same IPs for multiple rescans
+  if rescanCount < 1:
+    quit("You have to scan IPs at least once, right?")
+  elif rescanCount > 1:
+    ips = ips.cycle(rescanCount)
   
+  # Randomize IPs
+  randomize()
+  ips.shuffle()
+
   waitFor mainWork(ips)
   
-  # Wait until all requests complete (or timeout)
+  # Wait until all requests complete (or time-out)
   while hasPendingOperations():
     poll()
   
   # Last update of the bar just for completeness
-  waitFor updateBar()
+  updateBar()
   echo ""
 
-  for res in infoData:
-    outFile.writeLine(res)
+  for ip, res in results:
+    outfile.writeLine(if res.rawData.len > 0:
+      &"ip: {ip}, device info: {res.rawData}"
+    else:
+      &"ip: {ip} name: {res.name}, model: {res.model}, device: {res.device}")
   
   outFile.flushFile()
   outFile.close()
@@ -216,9 +242,9 @@ proc main =
     help = {
       "input": "Input file",
       "output": "Output file",
-      "parseMode": "Input file format: Masscan, PlainText (default)",
+      "parseMode": "Input file format: PlainText (default), Masscan",
       "workers": "Amount of workers to use",
-      "rescanCount": "Amount of requests to be sent to a single IP (0 for no rescans)"
+      "rescanCount": "Amount of requests to be sent to a single IP (1 for a single scan)"
     }
   )
 
