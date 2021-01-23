@@ -77,6 +77,7 @@ proc recvMessage(s: AsyncSocket): Future[Option[tuple[m: Message, data: string]]
   result = some(res)
 
 proc parsePayload(ip, data: string): ScanResult =
+  var data = data.replace("\x00", "")
   result = ScanResult(rawData: data)
   var tmp, name, model, device: string
   const scanStr = "device::$*ro.product.name$*=$+;ro.product.model=$+;ro.product.device=$+;"
